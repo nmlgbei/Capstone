@@ -238,30 +238,44 @@ def evaluate_allocations(allocations, snr_matrices, ground_truth_labels=None, me
     fairness_indices = []
     outage_rates = []
     imitation_accuracies = [] if ground_truth_labels is not None else None
-    
+
+    snr_threshold_linear = 10**(CONFIG['snr_threshold_db']/10)
+
     for i in range(num_snapshots):
         snr = snr_matrices[i]
         alloc = allocations[i]
-        # Compute per-user throughput (assume unit bandwidth)
-        # Throughput = log2(1 + SNR) for assigned channel
-        assigned_snr = snr[np.arange(U), alloc]
-        throughput = np.log2(1 + assigned_snr)   # bps/Hz
-        throughputs.append(np.sum(throughput))
-        # Jain fairness index
-        sum_t = np.sum(throughput)
-        sum_t2 = np.sum(throughput**2)
+
+        # 计算每个用户的吞吐量和中断状态
+        throughput_user = np.zeros(U)
+        outage_user = np.zeros(U, dtype=bool)
+
+        for u in range(U):
+            if alloc[u] == -1:                     # 未分配用户
+                throughput_user[u] = 0.0
+                outage_user[u] = True              # 视为中断
+            else:
+                snr_val = snr[u, alloc[u]]
+                throughput_user[u] = np.log2(1 + snr_val)   # bps/Hz
+                outage_user[u] = (snr_val < snr_threshold_linear)
+
+        total_throughput = np.sum(throughput_user)
+        throughputs.append(total_throughput)
+
+        # Jain公平性指数（未分配用户贡献0）
+        sum_t = total_throughput
+        sum_t2 = np.sum(throughput_user**2)
         fairness = (sum_t**2) / (U * sum_t2 + 1e-9)
         fairness_indices.append(fairness)
-        # Outage probability: SNR < threshold (linear scale)
-        snr_threshold_linear = 10**(CONFIG['snr_threshold_db']/10)
-        outage = np.mean(assigned_snr < snr_threshold_linear)
-        outage_rates.append(outage)
-        # Imitation accuracy if ground truth provided
+
+        outage_rate = np.mean(outage_user)
+        outage_rates.append(outage_rate)
+
+        # 模仿准确率（若提供真实标签）
         if ground_truth_labels is not None:
             gt = ground_truth_labels[i]
             acc = np.mean(alloc == gt)
             imitation_accuracies.append(acc)
-    
+
     metrics = {
         'avg_throughput': np.mean(throughputs),
         'avg_fairness': np.mean(fairness_indices),
@@ -433,4 +447,3 @@ def max_snr_random_resolve(snr_matrix):
         new_assignment[u] = ch
     return new_assignment
 if __name__ == "__main__":
-    main()
