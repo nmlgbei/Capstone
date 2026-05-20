@@ -113,55 +113,43 @@ def random_allocate(num_users, num_channels):
 def resolve_conflicts(assignment, snr_matrix):
     """
     Post-process an assignment that may have conflicts.
-    Keeps the user with highest SNR on each channel, reallocates others greedily.
+    Ensures each channel is assigned to at most one user.
+    If U > K, only K users receive a channel; the rest are set to -1.
     Returns conflict-free assignment.
     """
     U, K = snr_matrix.shape
-    assignment = assignment.copy()
-    # Build mapping channel -> list of users
+    # Step 1: initial assignment (may have conflicts)
+    # We'll build a new assignment from scratch
+    new_assign = np.full(U, -1, dtype=int)
+    # Map channel -> list of users who initially chose it
     channel_to_users = {}
     for u, ch in enumerate(assignment):
         if ch != -1:
             channel_to_users.setdefault(ch, []).append(u)
-    # Find conflicts: channels with more than one user
-    conflict_channels = [ch for ch, users in channel_to_users.items() if len(users) > 1]
-    # For each conflicted channel, keep only the user with highest SNR on that channel
-    to_reallocate = []
-    for ch in conflict_channels:
-        users_on_ch = channel_to_users[ch]
-        # Find user with highest SNR on this channel
-        snr_on_ch = snr_matrix[users_on_ch, ch]
-        best_idx = np.argmax(snr_on_ch)
-        keep_user = users_on_ch[best_idx]
-        # Others need reallocation
-        for u in users_on_ch:
-            if u != keep_user:
-                to_reallocate.append(u)
-        assignment[keep_user] = ch
-        # Mark others as unassigned temporarily
-        for u in to_reallocate:
-            assignment[u] = -1
-    # Now reallocate pending users greedily
-    # Sort by their best SNR
-    to_reallocate = list(set(to_reallocate))
-    # Recompute best SNR for each pending user (only on free channels)
-    used_channels = set(assignment[assignment != -1])
+    # Step 2: for each channel, keep only the user with highest SNR on that channel
+    used_channels = set()
+    for ch, users in channel_to_users.items():
+        if not users:
+            continue
+        # Find user with max SNR on this channel
+        best_u = max(users, key=lambda u: snr_matrix[u, ch])
+        new_assign[best_u] = ch
+        used_channels.add(ch)
+    # Step 3: remaining unassigned users (those not kept in step 2) try to get free channels
+    unassigned = [u for u in range(U) if new_assign[u] == -1]
     free_channels = [c for c in range(K) if c not in used_channels]
-    # If not enough free channels, assign best available
-    pending_sorted = sorted(to_reallocate, key=lambda u: np.max(snr_matrix[u]), reverse=True)
-    for u in pending_sorted:
-        # Find best free channel for this user
-        if not free_channels:
-            # No free channels left; assign best among all (conflict allowed? we avoid)
-            # In this case, we can reuse the best channel, but better to break.
-            # For simplicity, we assign the channel with highest SNR even if used.
-            best_ch = np.argmax(snr_matrix[u])
+    # Sort unassigned users by their best SNR (descending) for fairness
+    unassigned_sorted = sorted(unassigned, key=lambda u: np.max(snr_matrix[u]), reverse=True)
+    for u in unassigned_sorted:
+        if free_channels:
+            # Assign the best free channel (highest SNR) to this user
+            best_free = max(free_channels, key=lambda c: snr_matrix[u, c])
+            new_assign[u] = best_free
+            free_channels.remove(best_free)
         else:
-            snr_free = snr_matrix[u, free_channels]
-            best_ch = free_channels[np.argmax(snr_free)]
-            free_channels.remove(best_ch)
-        assignment[u] = best_ch
-    return assignment
+            # No channels left → remain unassigned
+            new_assign[u] = -1
+    return new_assign
 
 # ==================== 3. Dataset Generation ====================
 def generate_dataset(config):
@@ -447,3 +435,4 @@ def max_snr_random_resolve(snr_matrix):
         new_assignment[u] = ch
     return new_assignment
 if __name__ == "__main__":
+    main()
